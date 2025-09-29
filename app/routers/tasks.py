@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.auth.utils import get_current_active_user
 from app.database import get_session
-from app.models import Task, TaskCreate, TaskRead, TaskUpdate
+from app.models import Task, TaskCreate, TaskRead, TaskUpdate, User
 
 router = APIRouter(
     prefix="/tasks",
@@ -16,10 +17,14 @@ router = APIRouter(
 
 @router.post("/", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 async def create_task(
-    task: TaskCreate, session: AsyncSession = Depends(get_session)
+    task: TaskCreate, 
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user)
 ):
     """Create a new task"""
     db_task = Task.from_orm(task)
+    db_task.user_id = current_user.id
+    
     session.add(db_task)
     await session.commit()
     await session.refresh(db_task)
@@ -33,9 +38,10 @@ async def read_tasks(
     status: Optional[str] = Query(None, description="Filter tasks by status"),
     priority: Optional[str] = Query(None, description="Filter tasks by priority"),
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
 ):
     """Get all tasks with optional filtering"""
-    query = select(Task)
+    query = select(Task).where(Task.user_id == current_user.id)
     
     # Add filters if provided
     if status:
@@ -52,7 +58,11 @@ async def read_tasks(
 
 
 @router.get("/{task_id}", response_model=TaskRead)
-async def read_task(task_id: int, session: AsyncSession = Depends(get_session)):
+async def read_task(
+    task_id: int, 
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user)
+):
     """Get a specific task by ID"""
     query = select(Task).where(Task.id == task_id)
     result = await session.execute(query)
@@ -64,6 +74,13 @@ async def read_task(task_id: int, session: AsyncSession = Depends(get_session)):
             detail=f"Task with ID {task_id} not found"
         )
     
+    # Check if the task belongs to the current user
+    if task.user_id != current_user.id and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    
     return task
 
 
@@ -72,6 +89,7 @@ async def update_task(
     task_id: int,
     task_update: TaskUpdate,
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
 ):
     """Update a task partially"""
     query = select(Task).where(Task.id == task_id)
@@ -82,6 +100,13 @@ async def update_task(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail=f"Task with ID {task_id} not found"
+        )
+        
+    # Check if the task belongs to the current user
+    if db_task.user_id != current_user.id and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
         )
     
     # Update task attributes that are provided
@@ -97,7 +122,11 @@ async def update_task(
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(task_id: int, session: AsyncSession = Depends(get_session)):
+async def delete_task(
+    task_id: int, 
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user)
+):
     """Delete a task"""
     query = select(Task).where(Task.id == task_id)
     result = await session.execute(query)
@@ -107,6 +136,13 @@ async def delete_task(task_id: int, session: AsyncSession = Depends(get_session)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail=f"Task with ID {task_id} not found"
+        )
+        
+    # Check if the task belongs to the current user
+    if task.user_id != current_user.id and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
         )
     
     await session.delete(task)

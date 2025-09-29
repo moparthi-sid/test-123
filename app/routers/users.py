@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from app.auth.utils import get_password_hash, get_current_active_user
 from app.database import get_session
 from app.models import User, UserCreate, UserRead, UserUpdate
 
@@ -42,8 +43,8 @@ async def create_user(
         )
     
     # Create new user
-    # In a real application, you would hash the password here
-    hashed_password = user.password  # Replace with proper hashing
+    # Hash the password
+    hashed_password = get_password_hash(user.password)
     
     db_user = User(
         email=user.email,
@@ -63,7 +64,8 @@ async def create_user(
 async def read_users(
     skip: int = 0, 
     limit: int = 100, 
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user)
 ):
     """Get all users"""
     query = select(User).offset(skip).limit(limit)
@@ -73,7 +75,11 @@ async def read_users(
 
 
 @router.get("/{user_id}", response_model=UserRead)
-async def read_user(user_id: int, session: AsyncSession = Depends(get_session)):
+async def read_user(
+    user_id: int, 
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user)
+):
     """Get a specific user by ID"""
     query = select(User).where(User.id == user_id)
     result = await session.execute(query)
@@ -93,7 +99,14 @@ async def update_user(
     user_id: int,
     user_update: UserUpdate,
     session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user)
 ):
+    # Check if user is updating their own profile or is a superuser
+    if current_user.id != user_id and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
     """Update a user partially"""
     query = select(User).where(User.id == user_id)
     result = await session.execute(query)
@@ -132,8 +145,8 @@ async def update_user(
     # Update password if provided
     user_data = user_update.dict(exclude_unset=True)
     if "password" in user_data:
-        # In a real application, you would hash the password here
-        hashed_password = user_data.pop("password")  # Replace with proper hashing
+        # Hash the password
+        hashed_password = get_password_hash(user_data.pop("password"))
         user_data["hashed_password"] = hashed_password
     
     # Update user attributes that are provided
@@ -148,7 +161,17 @@ async def update_user(
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(user_id: int, session: AsyncSession = Depends(get_session)):
+async def delete_user(
+    user_id: int, 
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_active_user)
+):
+    # Only superusers can delete users
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
     """Delete a user"""
     query = select(User).where(User.id == user_id)
     result = await session.execute(query)

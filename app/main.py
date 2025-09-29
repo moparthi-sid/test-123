@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import create_db_and_tables
+from app.auth.router import router as auth_router
+from app.errors import add_exception_handlers
 from app.routers import tasks, users
 
 # Configure logging
@@ -46,8 +48,12 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(auth_router)
 app.include_router(tasks.router)
 app.include_router(users.router)
+
+# Add custom exception handlers
+add_exception_handlers(app)
 
 
 @app.get("/")
